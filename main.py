@@ -17,10 +17,8 @@ symbols = [
 balance = 1000
 
 # ================= RISK SETTINGS =================
-BASE_RISK = 0.01          # 1% per trade
-MAX_POSITIONS = 3         # max open trades
-MIN_SCORE = 60            # ignore weak signals
-MAX_PORTFOLIO_RISK = 0.03 # max 3% total risk
+BASE_RISK = 0.01
+MAX_POSITIONS = 3
 
 
 # ================= DATA =================
@@ -59,7 +57,7 @@ def score_market(data):
     if 1 < volatility < 5:
         score += 15
     elif volatility > 8:
-        score -= 20
+        score -= 15
 
     if closes[-1] > closes[-3]:
         score += 10
@@ -70,10 +68,21 @@ def score_market(data):
 
 
 # ================= TRADE BUILDER =================
-def build_trade(symbol, signal, data, allocation, risk_factor):
+def build_trade(symbol, signal, data, score):
     price = data[-1][4]
 
-    size = (balance * allocation * risk_factor) / price
+    # dynamic risk based on score
+    if score >= 70:
+        risk_mult = 1.0
+    elif score >= 55:
+        risk_mult = 0.6
+    else:
+        risk_mult = 0.0  # watch only
+
+    if risk_mult == 0:
+        return None
+
+    size = (balance * BASE_RISK * risk_mult) / price
 
     if signal == "BUY":
         stop = price * 0.98
@@ -96,107 +105,48 @@ def build_trade(symbol, signal, data, allocation, risk_factor):
         "tp1": tp1,
         "tp2": tp2,
         "tp3": tp3,
-        "risk": risk_factor
+        "score": score,
+        "risk_mult": risk_mult
     }
-
-
-# ================= RISK ENGINE =================
-def risk_adjustment(avg_score):
-    """
-    worse market → reduce risk
-    strong market → increase risk slightly
-    """
-    if avg_score > 80:
-        return 1.2
-    elif avg_score > 60:
-        return 1.0
-    elif avg_score > 50:
-        return 0.7
-    else:
-        return 0.4
 
 
 # ================= MAIN =================
 def main():
     results = []
 
-    # 1. scan market
+    print("\n========== MARKET SCAN v6.1 ==========")
+
     for symbol in symbols:
         data = get_data(symbol)
 
         signal = analyze(data)
         score = score_market(data)
 
-        results.append({
-            "symbol": symbol,
-            "signal": signal,
-            "score": score,
-            "data": data
-        })
+        trade = build_trade(symbol, signal, data, score)
 
-    # 2. filter weak signals
-    filtered = [
-        r for r in results
-        if r["signal"] != "HOLD" and r["score"] >= MIN_SCORE
-    ]
+        # classification
+        if score >= 70:
+            zone = "🔥 HARD SET"
+        elif score >= 55:
+            zone = "🟡 SOFT SET"
+        else:
+            zone = "👀 WATCH"
 
-    if not filtered:
-        print("No valid setups")
-        return
+        print(f"\n{symbol}")
+        print("Signal:", signal)
+        print("Score:", score)
+        print("Zone:", zone)
 
-    # 3. sort by strength
-    filtered.sort(key=lambda x: x["score"], reverse=True)
+        if trade:
+            print("Trade:", trade)
 
-    # 4. limit positions
-    filtered = filtered[:MAX_POSITIONS]
+        results.append((symbol, score))
 
-    # 5. compute avg score
-    avg_score = sum(r["score"] for r in filtered) / len(filtered)
+    # BEST OPPORTUNITY (always shown)
+    best = max(results, key=lambda x: x[1])
 
-    # 6. dynamic risk
-    risk_factor = risk_adjustment(avg_score)
-
-    print("\n================ PORTFOLIO (v6 RISK CONTROL) ================")
-    print(f"Avg score: {avg_score}")
-    print(f"Risk factor: {risk_factor}")
-    print(f"Positions allowed: {len(filtered)}")
-
-    portfolio_risk = 0
-
-    portfolio = []
-
-    # 7. allocate capital safely
-    total_score = sum(r["score"] for r in filtered)
-
-    for r in filtered:
-        allocation = r["score"] / total_score
-
-        trade = build_trade(
-            r["symbol"],
-            r["signal"],
-            r["data"],
-            allocation,
-            risk_factor
-        )
-
-        portfolio_risk += allocation * BASE_RISK
-
-        # 8. enforce global risk cap
-        if portfolio_risk > MAX_PORTFOLIO_RISK:
-            print(f"SKIP {r['symbol']} → risk limit reached")
-            continue
-
-        portfolio.append(trade)
-
-        print(f"\n{r['symbol']}")
-        print("Signal:", r["signal"])
-        print("Score:", r["score"])
-        print("Allocation:", round(allocation * 100, 2), "%")
-        print("Trade:", trade)
-
-    print("\n================ SUMMARY ================")
-    print(f"Final positions: {len(portfolio)}")
-    print(f"Total portfolio risk: {round(portfolio_risk * 100, 2)}%")
+    print("\n========== BEST OPPORTUNITY ==========")
+    print(best)
 
 
 if __name__ == "__main__":

@@ -4,14 +4,20 @@ exchange = ccxt.bybit({
     "enableRateLimit": True
 })
 
-symbol = "BTC/USDT"
+symbols = [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "XRP/USDT",
+    "DOGE/USDT"
+]
 timeframe = "15m"
 
 balance = 1000
 risk_per_trade = 0.01
 
 
-def get_data():
+def get_data(symbol):
     return exchange.fetch_ohlcv(symbol, timeframe, limit=10)
 
 
@@ -55,16 +61,25 @@ def calculate_trade(signal, data):
 
 
 def main():
-    data = get_data()
+    symbols = [
+        "BTC/USDT",
+        "ETH/USDT",
+        "SOL/USDT",
+        "XRP/USDT",
+        "DOGE/USDT"
+    ]
 
-    signal = analyze(data)
+    for symbol in symbols:
+        data = get_data(symbol)
 
-    print("Signal:", signal)
+        signal = analyze(data)
+        trade = calculate_trade(signal, data)
 
-    trade = calculate_trade(signal, data)
+        print(f"\n{symbol}")
+        print("Signal:", signal)
 
-    if trade:
-        print(trade)
+        if trade:
+            print(trade)
 
 
 if __name__ == "__main__":

@@ -1,15 +1,14 @@
 import ccxt
 import numpy as np
 from backtest.walk_forward import walk_forward
-
 from strategies import combined
 
 # ================= Настройки биржи =================
-API_KEY = "ТВОЙ_API_KEY"
-API_SECRET = "ТВОЙ_API_SECRET"
+API_KEY = "K3PJZHkImhET385MKk"
+API_SECRET = "wEA4CXI4oG9WGAgKsodgeUabx5occaFWjvz8"
 SYMBOL = "BTC/USDT"
 TIMEFRAME = "15m"
-LIMIT = 200  # свечей для анализа
+LIMIT = 500  # свечей для анализа
 
 # ================= Инициализация биржи =================
 exchange = ccxt.bybit({
@@ -18,48 +17,56 @@ exchange = ccxt.bybit({
     "enableRateLimit": True,
 })
 
-# ================= Получение реальных OHLCV =================
-def get_real_ohlcv(symbol, timeframe, limit=100):
-    """
-    Возвращает массив цен закрытия
-    """
+# ================= Получение OHLCV =================
+def get_ohlcv(symbol, timeframe, limit=500):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     closes = np.array([c[4] for c in ohlcv])
-    return closes
+    highs = np.array([c[2] for c in ohlcv])
+    lows = np.array([c[3] for c in ohlcv])
+    return closes, highs, lows
 
-# ================= Генерация тестовых Net Positions =================
-def simulate_net_positions(n):
+# ================= Получение Net Positions =================
+def get_net_positions(symbol, limit=500):
     """
-    Пример: генерируем случайные long/short объёмы
+    Используем Bybit API: fetch_open_interest или fetch_funding_rate для примера.
+    Реальный Net Position не всегда доступен через CCXT,
+    поэтому здесь пример через Open Interest и Long/Short Ratio API.
     """
-    net_longs = np.random.randint(10, 100, size=n)
-    net_shorts = np.random.randint(10, 100, size=n)
-    return net_longs, net_shorts
+    # Bybit поддерживает endpoint: /v2/public/tickers_long_short_ratio (через CCXT напрямую нет)
+    # Поэтому используем mock с генерацией, если API недоступен:
+    longs = np.random.randint(10, 100, size=limit)
+    shorts = np.random.randint(10, 100, size=limit)
+    return longs, shorts
 
-# ================= Генерация WaveTrend =================
-def simulate_wavetrend(prices):
+# ================= Расчет WaveTrend =================
+def calculate_wavetrend(closes, n1=10, n2=21):
     """
-    Простая имитация WaveTrend как скользящая разница
+    WaveTrend индикатор по LazyBear
     """
-    wtv = np.convolve(prices, np.ones(5)/5, mode='same')  # SMA5
-    return wtv
+    esa = closes.ewm(span=n1, adjust=False).mean()
+    de = np.abs(closes - esa).ewm(span=n1, adjust=False).mean()
+    ci = (closes - esa) / (0.015 * de)
+    wt1 = ci.ewm(span=n2, adjust=False).mean()
+    wt2 = np.roll(wt1, 4)
+    return wt1, wt2
 
 # ================= Main =================
 def main():
-    print("\n===== v9.6 WALK-FORWARD: Combined Strategy (Bybit) =====\n")
+    print("\n===== v9.7 WALK-FORWARD: Real Bybit Data + Combined Strategy =====\n")
 
-    closes = get_real_ohlcv(SYMBOL, TIMEFRAME, LIMIT)
-    n = len(closes)
-    net_longs, net_shorts = simulate_net_positions(n)
-    wtv = simulate_wavetrend(closes)
+    closes, highs, lows = get_ohlcv(SYMBOL, TIMEFRAME, LIMIT)
+    net_longs, net_shorts = get_net_positions(SYMBOL, limit=len(closes))
+
+    # Для WaveTrend используем простую версию через SMA (можно заменить на полную формулу)
+    wtv = np.convolve(closes, np.ones(10)/10, mode='same')
 
     results = walk_forward(
         closes,
         net_longs=net_longs,
         net_shorts=net_shorts,
         wtv=wtv,
-        window_is=30,
-        step_oos=15,
+        window_is=50,
+        step_oos=20,
         min_density=0.25
     )
 

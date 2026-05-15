@@ -1,24 +1,18 @@
 import ccxt
+import time
 
-exchange = ccxt.bybit({
-    "enableRateLimit": True
-})
+exchange = ccxt.bybit({"enableRateLimit": True})
 
 timeframe = "15m"
 
-symbols = [
-    "BTC/USDT",
-    "ETH/USDT",
-    "SOL/USDT",
-    "XRP/USDT",
-    "DOGE/USDT"
-]
+symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 
 balance = 1000
 
-# ================= RISK SETTINGS =================
 BASE_RISK = 0.01
-MAX_POSITIONS = 3
+
+# ================= ACTIVE POSITION STORAGE =================
+positions = []
 
 
 # ================= DATA =================
@@ -37,116 +31,136 @@ def analyze(data):
     return "HOLD"
 
 
-# ================= SCORING =================
+# ================= SCORE =================
 def score_market(data):
     closes = [c[4] for c in data]
 
     momentum = (closes[-1] - closes[-5]) / closes[-5] * 100
 
-    highs = [c[2] for c in data]
-    lows = [c[3] for c in data]
-    volatility = ((max(highs) - min(lows)) / closes[-1]) * 100
+    score = 50 + momentum * 2
 
-    score = 50
-
-    if momentum > 0:
-        score += min(momentum * 2, 25)
-    else:
-        score += max(momentum * 2, -25)
-
-    if 1 < volatility < 5:
-        score += 15
-    elif volatility > 8:
-        score -= 15
-
-    if closes[-1] > closes[-3]:
-        score += 10
-    else:
-        score -= 10
-
-    return max(round(score, 2), 0)
+    return max(min(score, 100), 0)
 
 
-# ================= TRADE BUILDER =================
-def build_trade(symbol, signal, data, score):
+# ================= TRADE CREATION =================
+def create_trade(symbol, signal, data, score):
     price = data[-1][4]
 
-    # dynamic risk based on score
-    if score >= 70:
-        risk_mult = 1.0
-    elif score >= 55:
-        risk_mult = 0.6
-    else:
-        risk_mult = 0.0  # watch only
+    size = (balance * BASE_RISK) / price
 
-    if risk_mult == 0:
+    if signal == "HOLD" or score < 55:
         return None
-
-    size = (balance * BASE_RISK * risk_mult) / price
 
     if signal == "BUY":
-        stop = price * 0.98
-        tp1 = price * 1.02
-        tp2 = price * 1.04
-        tp3 = price * 1.06
-    elif signal == "SELL":
-        stop = price * 1.02
-        tp1 = price * 0.98
-        tp2 = price * 0.96
-        tp3 = price * 0.94
-    else:
-        return None
+        return {
+            "symbol": symbol,
+            "side": "LONG",
+            "entry": price,
+            "size": size,
+            "tp1": price * 1.02,
+            "tp2": price * 1.04,
+            "tp3": price * 1.06,
+            "stop": price * 0.98,
+            "status": "OPEN",
+            "tp1_hit": False,
+            "tp2_hit": False,
+            "tp3_hit": False
+        }
 
-    return {
-        "symbol": symbol,
-        "entry": price,
-        "size": size,
-        "stop": stop,
-        "tp1": tp1,
-        "tp2": tp2,
-        "tp3": tp3,
-        "score": score,
-        "risk_mult": risk_mult
-    }
+    if signal == "SELL":
+        return {
+            "symbol": symbol,
+            "side": "SHORT",
+            "entry": price,
+            "size": size,
+            "tp1": price * 0.98,
+            "tp2": price * 0.96,
+            "tp3": price * 0.94,
+            "stop": price * 1.02,
+            "status": "OPEN",
+            "tp1_hit": False,
+            "tp2_hit": False,
+            "tp3_hit": False
+        }
 
 
-# ================= MAIN =================
+# ================= POSITION MANAGEMENT =================
+def update_positions(current_price):
+    global positions
+
+    for pos in positions:
+
+        if pos["status"] != "OPEN":
+            continue
+
+        # TP1
+        if not pos["tp1_hit"]:
+            if (pos["side"] == "LONG" and current_price >= pos["tp1"]) or \
+               (pos["side"] == "SHORT" and current_price <= pos["tp1"]):
+                pos["tp1_hit"] = True
+                print(f"TP1 hit: {pos['symbol']}")
+
+        # TP2
+        if pos["tp1_hit"] and not pos["tp2_hit"]:
+            if (pos["side"] == "LONG" and current_price >= pos["tp2"]) or \
+               (pos["side"] == "SHORT" and current_price <= pos["tp2"]):
+                pos["tp2_hit"] = True
+                print(f"TP2 hit: {pos['symbol']} → move stop to BE")
+
+                # breakeven
+                pos["stop"] = pos["entry"]
+
+        # TP3 (close)
+        if pos["tp2_hit"] and not pos["tp3_hit"]:
+            if (pos["side"] == "LONG" and current_price >= pos["tp3"]) or \
+               (pos["side"] == "SHORT" and current_price <= pos["tp3"]):
+                pos["tp3_hit"] = True
+                pos["status"] = "CLOSED"
+                print(f"TP3 hit: CLOSE {pos['symbol']}")
+
+
+# ================= MAIN LOOP =================
 def main():
-    results = []
 
-    print("\n========== MARKET SCAN v6.1 ==========")
+    global positions
 
-    for symbol in symbols:
-        data = get_data(symbol)
+    print("\n===== EXECUTION INTELLIGENCE v7 STARTED =====")
 
-        signal = analyze(data)
-        score = score_market(data)
+    while True:
 
-        trade = build_trade(symbol, signal, data, score)
+        best_trade = None
+        best_score = 0
 
-        # classification
-        if score >= 70:
-            zone = "🔥 HARD SET"
-        elif score >= 55:
-            zone = "🟡 SOFT SET"
-        else:
-            zone = "👀 WATCH"
+        # scan market
+        for symbol in symbols:
 
-        print(f"\n{symbol}")
-        print("Signal:", signal)
-        print("Score:", score)
-        print("Zone:", zone)
+            data = get_data(symbol)
 
-        if trade:
-            print("Trade:", trade)
+            signal = analyze(data)
+            score = score_market(data)
 
-        results.append((symbol, score))
+            trade = create_trade(symbol, signal, data, score)
 
-    # BEST OPPORTUNITY (always shown)
-    best = max(results, key=lambda x: x[1])
+            if trade and score > best_score:
+                best_score = score
+                best_trade = trade
 
-    print("\n========== BEST OPPORTUNITY ==========")
-    print(best)
+        # open new position
+        if best_trade:
+            positions.append(best_trade)
+            print("\nNEW POSITION OPENED:")
+            print(best_trade)
+
+        # update existing positions
+        if positions:
+            current_price = exchange.fetch_ticker(symbols[0])["last"]
+            update_positions(current_price)
+
+        # clean closed positions
+        positions = [p for p in positions if p["status"] != "CLOSED"]
+
+        print(f"\nACTIVE POSITIONS: {len(positions)}")
+        time.sleep(10)
 
 
 if __name__ == "__main__":

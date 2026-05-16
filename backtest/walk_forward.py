@@ -1,50 +1,24 @@
-from backtest.engine import simulate_trades
-from strategies import combined
+from strategies.combined import generate_signals
+from backtest.simulate_trades import simulate_trades
 
 
-def walk_forward(
-    prices,
-    net_longs,
-    net_shorts,
-    wtv,
-    window_is=50,
-    step_oos=20,
-    min_density=0.25
-):
+def walk_forward(prices, net_longs, net_shorts, wtv, window=100, step=30):
 
-    n = len(prices)
     results = []
 
-    print(f"TOTAL DATA POINTS: {n}, window_is: {window_is}, step_oos: {step_oos}")
+    for start in range(0, len(prices) - window, step):
 
-    if n < window_is + step_oos:
-        print("NOT ENOUGH DATA")
-        return []
+        end = start + window
 
-    for start in range(0, n - window_is - step_oos, step_oos):
+        closes = prices[start:end]
+        longs = net_longs[start:end]
+        shorts = net_shorts[start:end]
+        wave = wtv[start:end]
 
-        end_is = start + window_is
-        end_oos = end_is + step_oos
+        signals = generate_signals(closes, longs, shorts, wave)
 
-        out_sample = prices[end_is:end_oos]
+        res = simulate_trades(closes, signals)
 
-        signals = combined.generate_signals(
-            prices[start:end_oos],
-            net_longs[start:end_oos],
-            net_shorts[start:end_oos],
-            wtv[start:end_oos],
-            min_density=min_density
-        )
-
-        oos_signals = signals[window_is:]
-
-        metrics = simulate_trades(out_sample, oos_signals)
-
-        results.append({
-            "strategy": "combined",
-            "start": start,
-            "end": end_oos,
-            "metrics": metrics
-        })
+        results.append(res)
 
     return results

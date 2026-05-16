@@ -1,68 +1,86 @@
 import numpy as np
-from strategies.regime import detect_regime, regime_weight
 
 
+# =========================================
+# SAFE NORMALIZATION
+# =========================================
+def safe_tanh(x):
+    return np.tanh(np.clip(x, -10, 10))
+
+
+# =========================================
+# REGIME DETECTION (trend vs chop)
+# =========================================
+def detect_regime(prices, idx, window=20):
+    start = max(0, idx - window)
+    slice_ = prices[start : idx + 1]
+
+    if len(slice_) < 5:
+        return 0.5  # neutral
+
+    returns = np.diff(slice_)
+    trend_strength = abs(np.mean(returns)) / (np.std(returns) + 1e-8)
+
+    # normalize to 0..1
+    regime = 1 / (1 + np.exp(-trend_strength))
+    return float(np.clip(regime, 0.0, 1.0))
+
+
+# =========================================
+# SIGNAL GENERATION
+# =========================================
 def generate_signals(prices, net_longs, net_shorts, wtv):
+    n = min(len(prices), len(net_longs), len(net_shorts), len(wtv))
 
     signals = []
 
-    n = min(len(prices), len(net_longs), len(net_shorts), len(wtv))
-
-    # буфер для стабильной нормализации (ключевой фикс)
-    score_window = []
-
     for i in range(n):
 
-        regime = detect_regime(prices[: i + 1])
-        weight = regime_weight(regime)
+        price = prices[i]
 
-        long_v = net_longs[i]
-        short_v = net_shorts[i]
+        # ===============================
+        # imbalance
+        # ===============================
+        long = net_longs[i]
+        short = net_shorts[i]
 
-        total = long_v + short_v
+        denom = long + short + 1e-8
+        imbalance = (long - short) / denom
 
-        imb = 0.0 if total == 0 else (long_v - short_v) / total
+        # ===============================
+        # wave trend
+        # ===============================
+        wt = wtv[i]
 
-        wt = (wtv[i] - 50) / 50
+        wt_signal = 0.0
+        if wt > 50:
+            wt_signal = 1
+        elif wt < -50:
+            wt_signal = -1
 
-        # =========================
-        # RAW SCORE
-        # =========================
-        score = (0.9 * imb + 0.7 * wt) * weight
+        # ===============================
+        # regime filter
+        # ===============================
+        regime = detect_regime(prices, i)
 
-        # -------------------------
-        # CLIP (убираем выбросы)
-        # -------------------------
-        score = np.clip(score, -1.0, 1.0)
+        # ===============================
+        # SCORE (CORE FIX)
+        # ===============================
+        score = imbalance * 1.5 + wt_signal * 1.0
 
-        # =========================
-        # STABLE NORMALIZATION (FIX #2)
-        # =========================
-        score_window.append(score)
+        # regime scaling (IMPORTANT FIX)
+        score *= 0.5 + regime
 
-        if len(score_window) > 50:
-            score_window.pop(0)
+        # clamp stability
+        score = safe_tanh(score * 2.0)
 
-        mean = np.mean(score_window)
-        std = np.std(score_window) + 1e-8
-
-        z = (score - mean) / std
-
-        # =========================
-        # SAFE SIGMOID (FIX #1)
-        # =========================
-        z = np.clip(z, -10, 10)
-        prob = 1 / (1 + np.exp(-z))
-
-        # =========================
-        # DECISION LOGIC
-        # =========================
-        if prob > 0.62:
+        # ===============================
+        # SIGNAL LOGIC
+        # ===============================
+        if score > 0.35:
             signals.append("LONG")
-
-        elif prob < 0.38:
+        elif score < -0.35:
             signals.append("SHORT")
-
         else:
             signals.append("FLAT")
 
